@@ -63,7 +63,7 @@ properties:
         description: Multi-paragraph description (optional)
       primary_language:
         type: string
-        enum: [python, typescript, javascript, go, rust, mixed, other]
+        enum: [python, typescript, javascript, go, rust, mixed, other, html]
         default: python
       primary_language_ext:
         type: string

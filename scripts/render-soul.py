@@ -41,6 +41,26 @@ SCHEMA_PATH = FRAMEWORK_DIR / "schema" / "project.schema.yaml"
 ROLES = ["orchestrator", "planner", "architect", "developer", "qa", "docs", "auditor"]
 
 
+def normalize_paths(data):
+    # Strip trailing slashes from the standard path keys in the
+    # "paths" mapping, in place.
+    #
+    # Why: rendered SOULs are read by humans and by tools that build
+    # site URLs by concatenating paths (e.g. source_root + "/build/...").
+    # A trailing slash on source_root / test_root / docs_root would
+    # produce a double-slash like "site//build/..." in the output.
+    # Doing it at load time means every downstream render path sees
+    # clean paths. We intentionally leave the root "/" alone (rstrip
+    # is a no-op on a single slash) and we leave empty strings alone.
+    paths = data.get("paths")
+    if not isinstance(paths, dict):
+        return
+    for key in ("source_root", "test_root", "docs_root",
+                "adr_root", "data_root", "repo_root"):
+        v = paths.get(key)
+        if isinstance(v, str) and v != "/" and v.endswith("/"):
+            paths[key] = v.rstrip("/")
+
 def load_project_yaml(path: Path) -> dict:
     """Load and validate a project.yaml against the schema."""
     if not path.exists():
@@ -48,6 +68,9 @@ def load_project_yaml(path: Path) -> dict:
     data = yaml.safe_load(path.read_text())
     if not isinstance(data, dict):
         raise SystemExit(f"ERROR: project.yaml is not a mapping: {path}")
+    # Normalize path strings (strip trailing slashes) BEFORE schema validation
+    # so the validated values match what gets rendered.
+    normalize_paths(data)
     if SCHEMA_PATH.exists():
         schema = yaml.safe_load(SCHEMA_PATH.read_text())
         try:

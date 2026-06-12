@@ -1,0 +1,168 @@
+# Minimal project.yaml for the "framework-only heartbeat" smoke test.
+#
+# Purpose: a 1-phase project whose orchestrator ticks on a fast cron
+# (every 5 min) and then idles. No code is ever written, no tests
+# run for real (test_command is the shell no-op `true`). Use this as
+# a reference for projects that want the framework as a cron-driven
+# state-machine + heartbeat loop, not a build orchestrator.
+#
+# Useful for:
+#   - smoke-testing a fresh bootstrap.sh install
+#   - validating the orchestrator's state machine end-to-end
+#   - verifying heartbeat.sh + cron integration
+#   - proving the framework can run with `source_root=""` (no code)
+#
+# Workflow:
+#   1. cp examples/heartbeat.yaml ~/.hermes/PROJECTS/heartbeat/project.yaml
+#   2. Create empty PROJECT.md, prd.md, TDD.md, Plan.md, EPICS.md, TASKLIST.md
+#      alongside it (the framework reads them but content is ignored here)
+#   3. Run bootstrap.sh on it
+#   4. Watch the orchestrator tick + log + idle forever
+
+project:
+  slug: heartbeat
+  dir_name: heartbeat
+  name: "Framework Heartbeat Smoke Test"
+  domain: "smoke-test: framework ticks forever, no code is written"
+  description: |
+    Minimal 1-phase kanban project used as a smoke test for the framework
+    itself. The orchestrator runs on a 5-minute cron, reads the project
+    state, performs a no-op tick, writes a HISTORY.md entry, and idles.
+    The single phase is marked DONE the first time the orchestrator sees
+    it, and the goal "tick once and idle" is achieved immediately. After
+    that, every tick is a no-op verify-and-log pass. No code, no tests,
+    no ADRs, no docs. If this project runs cleanly for 24h, the
+    framework's heartbeat + state machine + cron loop are healthy.
+  primary_language: other
+  primary_language_ext: md
+  test_command: "true"            # no-op: nothing to test, framework just ticks
+  build_command: ""               # nothing to build
+
+phases:
+  count: 1
+  acceptance_test_section: "§9"
+  planning_task_title_pattern: "T-PLAN-PHASE-{phase}: Heartbeat smoke test"
+
+# Number of phase exit criteria the auditor verifies. For a heartbeat
+# smoke test there is only one trivial criterion ("the orchestrator
+# ticked at least once and wrote a HISTORY entry") so this is 1.
+phase_exit_criteria_count: 1
+
+goal:
+  headline: |
+    Tick once and idle. Verify the framework's state machine + heartbeat
+    + cron loop. No code is written. This is a smoke test of the
+    framework itself, not a real project.
+  out_of_scope:
+    - "Any production code or feature work"
+    - "Real test suites (test_command is the shell no-op `true`)"
+    - "ADRs, EPICS, or design docs beyond a one-line PROJECT.md"
+    - "Multi-agent coordination (a heartbeat project has one role: tick)"
+    - "Long-running workers (every tick is a no-op verify-and-log pass)"
+  hard_constraints:
+    - "source_root / test_root / docs_root are empty strings — no code roots exist"
+    - "test_command is `true` and MUST stay `true` — never wire up real tests"
+    - "No model provider that requires a paid API key may be added later without
+       removing this project's `smoke-test` role"
+    - "Escalation channel is `none` — this project logs to HISTORY.md only.
+       If a real escalation fires, the operator must inspect HISTORY.md
+       manually; nothing pings a human."
+  acceptance_scenarios_pass:
+    - A   # TICK — orchestrator ran at least one cron tick, wrote a HISTORY entry
+
+escalation:
+  channel: none                    # log to HISTORY.md only, no human ping
+  contact: David
+  cooldown_hours: 24
+  notify_on: []                    # no events trigger an escalation; all logged only
+
+orchestrator:
+  cron_schedule: "*/5 * * * *"     # tick every 5 minutes — frequent enough to catch loops
+  heartbeat_cooldown_minutes: 5    # matches cron: each tick IS the heartbeat
+  max_actions_per_tick: 3          # plenty: a heartbeat tick is 1 action (log + exit)
+  hard_timeout_seconds: 300        # 5 min — never let a tick run into the next cron slot
+
+models:
+  # All 7 roles use the local Spark2 instance (lms_spark2) running Qwen3.6-35B-A3B.
+  # The smoke test is a no-op tick; any model that can answer "are we done yet?"
+  # works. Using the local instance avoids any paid-API rate limits.
+  orchestrator:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+  planner:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+  architect:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+  developer:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+  qa:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+  docs:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+  auditor:
+    provider: lms_spark2
+    model: "qwen/qwen3.6-35b-a3b"
+
+skills:
+  orchestrator:
+    - kanban-orchestrator
+  planner:
+    - kanban-worker
+  architect:
+    - kanban-worker
+  developer:
+    - kanban-worker
+  qa:
+    - kanban-worker
+  docs:
+    - kanban-worker
+  auditor: []                      # no skills — auditor is the "is the framework still healthy?" check
+
+paths:
+  source_root: ""                  # no code directory
+  test_root: ""                    # no test directory
+  docs_root: ""                    # no docs directory beyond PROJECT.md
+  adr_root: ""                     # no ADRs
+  data_root: ""                    # no project-owned state
+  repo_root: "."                   # the project root itself (relative to project.yaml)
+  sibling_projects: []             # no siblings — this project stands alone
+
+# No code-quality caps are meaningful when no code is written, but the
+# block is included so the framework's defaults are explicit.
+code_quality:
+  max_function_lines: 75
+  commit_max_files: 3
+  commit_max_lines_added: 50
+  commit_max_lines_removed: 50
+
+guardrails:
+  developer:
+    - "NEVER write code or create source files. This is a no-code smoke test.
+       If you find yourself reaching for `write_file` of a .py/.ts/etc., STOP —
+       block with kanban_block(reason='review-required: heartbeat project is no-code')."
+    - "NEVER change test_command away from `true`. Real tests would defeat
+       the purpose of the smoke test."
+    - "NEVER escalate (channel=none means no human is watching). Log everything
+       to HISTORY.md and let the operator inspect manually."
+  qa:
+    - "NEVER approve a card that adds code or a real test_command.
+       The heartbeat project must stay a pure no-op."
+    - "NEVER approve a card that changes escalation.channel away from `none`."
+    - "NEVER approve a phase-gate that has not been independently verified by
+       the auditor running one full tick."
+  architect:
+    - "NEVER produce an ADR. Heartbeat projects do not warrant design docs."
+
+inputs:
+  project_md: PROJECT.md
+  prd_md: prd.md
+  tdd_md: TDD.md
+  plan_md: Plan.md
+  epics_md: EPICS.md
+  tasklist_md: TASKLIST.md
+  critique_md: ""                  # no critique doc for a smoke test
