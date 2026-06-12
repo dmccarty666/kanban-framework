@@ -31,6 +31,16 @@
 
 set -euo pipefail
 
+# Ensure hermes CLI is on PATH (cron uses minimal PATH; user shells source .bashrc)
+export PATH="$HOME/.hermes/hermes-agent/venv/bin:$PATH"
+
+# Source ~/.hermes/.env if present (API keys live there; cron doesn't inherit them)
+if [[ -f "$HOME/.hermes/.env" ]]; then
+    set -a
+    source "$HOME/.hermes/.env"
+    set +a
+fi
+
 # ---------------------------------------------------------------------------
 # Resolve PROJECT_DIR
 # ---------------------------------------------------------------------------
@@ -80,6 +90,12 @@ fi
 
 ORCHESTRATOR_PROFILE="${PROJECT_SLUG}-orchestrator"
 ORCH_DIR="${PROJECT_DIR}/orchestrator"
+# Lock-file cleanup contract:
+#   heartbeat.sh OWNS the .lock file. The trap on EXIT below removes it.
+#   The orchestrator agent MUST NOT `rm` the lock directly — the cron
+#   approvals.cron_mode policy may deny the `rm`, and even if it passes,
+#   racing the trap can cause spurious "no lock" log lines.
+#   To release the lock, the agent should simply exit; the trap handles it.
 LOCK_FILE="${ORCH_DIR}/.lock"
 LOG_FILE="${ORCH_DIR}/heartbeat.log"
 
@@ -163,7 +179,10 @@ Workflow:
   8. Update STATE.md (new heartbeat, new state if transitioned, current side
      issues).
   9. Append exactly one entry to HISTORY.md.
- 10. Remove the lock file.
+ 10. Exit — heartbeat.sh owns the .lock file. The trap on its EXIT
+     removes the lock; you MUST NOT `rm` the lock yourself.
+     (Doing so races the trap and may also be denied by the
+     approvals.cron_mode policy that cron-spawned runs inherit.)
  11. Exit.
 
 Stay within your tool surface (SOUL tool-surface section). When in doubt,
