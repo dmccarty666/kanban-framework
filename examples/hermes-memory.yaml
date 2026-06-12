@@ -1,0 +1,370 @@
+# Reference project.yaml for the existing hermes-memory project.
+#
+# This file is canon: when bootstrap.sh renders SOULs from templates using
+# THIS file as input, the result should be byte-identical (modulo whitespace
+# / template-controlled comments) to the hand-written SOULs currently
+# installed in ~/.hermes/PROJECTS/hermes-memory/souls/.
+#
+# That equivalence is our regression test for the templates.
+
+project:
+  slug: hm
+  dir_name: hermes-memory       # <-- actual directory name under ~/.hermes/PROJECTS/, may differ from slug
+  name: "Hermes Local Memory"
+  domain: "local-first conversation memory plugin for Hermes Agent"
+  description: |
+    Replace Hermes's holographic fact_store with a local-first, source-traceable
+    memory subsystem (hermes-local plugin). Provides redaction at write time,
+    keyword + semantic + hybrid retrieval, recent context, narrative thread on
+    /new, and nightly dream summarization, with full backup + rebuild support.
+  primary_language: python
+  primary_language_ext: py
+  test_command: "scripts/run_tests.sh tests/integration/memory/"
+  build_command: ""
+
+phases:
+  count: 6
+  acceptance_test_section: "§9"
+  planning_task_title_pattern: "T-PLAN-PHASE-{phase}: Decompose Phase {phase} of hermes-memory"
+  # Phase-specific QA gate checklist — drives qa.md.tmpl §3 GATE 4 (sourced from hm-qa.md lines 94-126)
+  qa_gate_checklist:
+    - number: 1
+      name: "capture + redaction"
+      checks:
+        - "Fixture API key (sk-test*), AWS key, GitHub token tests pass against\n      the real redaction.py"
+        - "Raw secret values not present anywhere in JSONL / SQLite / QMD after redaction"
+        - "Audit-log row exists for every fixture redaction event"
+        - "`force_no_redact` not present in code"
+    - number: 2
+      name: "keyword search + plugin activation"
+      checks:
+        - "Provider swap verified: `memory.provider: hermes-local` activates,\n      `fact_store` and `fact_feedback` (holographic) NOT in tool list"
+        - "FTS5 exact-string lookup works for fixture errors / config keys"
+    - number: 3
+      name: "semantic"
+      checks:
+        - "Conceptual query returns relevant Qdrant hit"
+        - "Indexer is idempotent (run twice, no duplicate Qdrant points)"
+        - "Indexer catches up on startup (pending turns from prior run get indexed)"
+    - number: 4
+      name: "hybrid + recent context"
+      checks:
+        - "Hybrid query merges + dedupes + reranks correctly"
+        - "Graceful degradation: kill Qdrant, hybrid still returns FTS results\n       with degraded_modes: ['qdrant'] in response"
+        - "memory_recent_context respects max_chars budget"
+    - number: 5
+      name: "narrative thread + dreamer"
+      checks:
+        - "/new → next assistant response references prior session focus\n       (Plan.md §9 Scenario J)"
+        - "Dreamer produces daily memory file + dream report with source refs"
+        - "Contradictions surface as 'disputed', not silently overwritten"
+    - number: 6
+      name: "migration + hardening"
+      checks:
+        - "Migration from holographic preserves all facts by content_hash"
+        - "Re-running migration is no-op"
+        - "rebuild-indexes recreates correct row counts from raw JSONL"
+
+# Number of phase exit criteria the auditor verifies for a phase gate.
+# Drives auditor.md.tmpl §1b "run full N-point checklist" rendering.
+phase_exit_criteria_count: 18
+
+goal:
+  headline: |
+    Land the hermes-memory MVP — Plan.md Phases 1 through 6 — with the MVP
+    acceptance test suite green.
+  out_of_scope:
+    - "Mem0 OSS integration (post-MVP per PROJECT.md §3.2)"
+    - "Graph memory (post-MVP)"
+    - "Web dashboard (post-MVP)"
+    - "Cross-agent memory bus for OpenClaw / Agent Zero (post-MVP)"
+    - "Document / transcript ingestion (post-MVP)"
+    - "LLM-based contradiction detection (heuristic v1 is the MVP target)"
+    - "Memory review queue UI (post-MVP)"
+    - "Hermes core changes beyond what ADR-001 authorizes"
+  hard_constraints:
+    - "Schema independence: zero direct queries into hermes_state.db or memory_store.db schemas"
+    - "No remote push: all commits stay local on the hermes-agent feature branches"
+    - "Real services in tests: no internal-module mocking; real Qdrant @ :6333, LMS @ :1235, SQLite tmp_path"
+    - "Redaction is Phase 1: all secrets blocked at write time, fixture-tested before any other Phase 1 code lands"
+    - "force_no_redact removed: the argument must not appear anywhere in code"
+  acceptance_scenarios_pass:
+    - A   # Lossless Capture
+    - B   # Redaction
+    - C   # Keyword Search
+    - D   # Semantic Search
+    - E   # Hybrid Retrieval
+    - F   # Recent Context
+    - G   # Narrative Thread
+    - H   # /new continuity
+    - I   # Migration
+    - J   # /new + prior session
+    - K   # Backup + Rebuild
+    - L   # MVP suite green
+
+escalation:
+  channel: telegram
+  contact: David
+  cooldown_hours: 24
+  notify_on:
+    - review_required_24h
+    - adr_needed
+    - worker_reclaimed_twice
+    - hallucination_warning
+    - state_drift
+    - phase_gate_failed
+    - goal_achieved
+    - stale_lock_5h
+    - stale_qa_block
+
+orchestrator:
+  cron_schedule: "*/30 * * * *"
+  heartbeat_cooldown_minutes: 10
+  max_actions_per_tick: 3
+  hard_timeout_seconds: 900
+
+models:
+  orchestrator:
+    provider: openrouter
+    model: "minimax/minimax-m2.7"
+  planner:
+    provider: openrouter
+    model: "minimax/minimax-m2.7"
+  architect:
+    provider: openrouter
+    model: "nvidia/nemotron-3-super-120b-a12b"
+  developer:
+    provider: openai-codex
+    model: "gpt-5.4"
+  qa:
+    provider: openrouter
+    model: "minimax/minimax-m2.7"
+  docs:
+    provider: openrouter
+    model: "moonshotai/kimi-k2"
+  auditor:
+    provider: openrouter
+    model: "moonshotai/kimi-k2"
+
+skills:
+  orchestrator:
+    - kanban-orchestrator
+  planner:
+    - kanban-worker
+    - writing-plans
+  architect:
+    - kanban-worker
+    - writing-plans
+  developer:
+    - kanban-worker
+    - test-driven-development
+    - systematic-debugging
+    - github-pr-workflow
+  qa:
+    - kanban-worker
+    - requesting-code-review
+    - systematic-debugging
+  docs:
+    - kanban-worker
+  auditor: []   # auditor source SOUL: "None auto-loaded for auditor — auditor runs lean and direct"
+
+paths:
+  source_root: "~/.hermes/hermes-agent/plugins/memory/hermes-local"
+  test_root: "~/.hermes/hermes-agent/tests/integration/memory"
+  docs_root: "docs/"
+  adr_root: "docs/adr/"
+  repo_root: "~/.hermes/hermes-agent"
+  # Additional code roots the developer must know about (developer.md.tmpl §1)
+  additional_source_roots:
+    - path: "~/.hermes/hermes-agent/hermes_memory_core"
+      label: "shared library"
+    - path: "~/.hermes/hermes-agent/hermes_memory_gateway"
+      label: "FastAPI service"
+  # Data root for project-owned persistent state (developer.md.tmpl §1)
+  data_root: |-
+    ~/.hermes/memory/                  (project-owned)
+      ~/.hermes/memory/index/memory.sqlite
+  sibling_projects:
+    - label: "holographic plugin (read-only reference)"
+      path: "~/.hermes/hermes-agent/plugins/memory/holographic"
+      access: read-only
+    - label: "honcho plugin (read-only reference)"
+      path: "~/.hermes/hermes-agent/plugins/memory/honcho"
+      access: read-only
+    - label: "MemoryProvider ABC (read-only reference)"
+      path: "~/.hermes/hermes-agent/agent/memory_provider.py"
+      access: read-only
+
+# Local infrastructure available in tests — drives developer.md.tmpl §5 Anti-Mock Philosophy and qa.md.tmpl §3 GATE 3
+test_environment:
+  services:
+    - name: Qdrant
+      endpoint: "http://localhost:6333"
+      note: "live, has `memories` collection"
+      test_pattern: "_test collection suffix"
+      health_check: "curl http://localhost:6333/collections"
+    - name: "LMS embeddings"
+      endpoint: "http://192.168.2.105:1235"
+      note: "`text-embedding-nomic-embed-text-v1.5@f16`, 768d"
+      test_pattern: "skip-if-down acceptable"
+      health_check: "curl http://192.168.2.105:1235/v1/models"
+    - name: "Spark2 LLM"
+      endpoint: "http://192.168.2.105:1234"
+      note: "Qwen3.6-35B for dreamer"
+      health_check: "curl http://192.168.2.105:1234/v1/models"
+    - name: SQLite
+      endpoint: "native"
+      note: "via pytest tmp_path fixture"
+
+# Coding-style limits — drives developer.md.tmpl GATE Code Quality + baby-step commit rules
+code_quality:
+  max_function_lines: 75
+  commit_max_files: 3
+  commit_max_lines_added: 50
+  commit_max_lines_removed: 50
+
+guardrails:
+  developer:
+    - "NEVER touch holographic's memory_store.db schema or hermes_state.db schema directly. Schema independence is non-negotiable (TDD §6, NFR-011). Only access Hermes core via public helpers (get_hermes_home, apply_wal_with_fallback, the MemoryProvider ABC)."
+    - "NEVER skip redaction tests on capture-path work. Phase 1 redaction is the foundation. Any code touching sync_turn, capture_event, or JSONL/SQLite write paths MUST have fixture-secret tests covering AWS keys, GitHub tokens, OpenAI keys (sk-...), Anthropic keys, SSN, Luhn cards, private keys."
+    - "NEVER auto-complete schema, migration, narrative-thread, or redaction work. End those with kanban_block(reason='review-required: <one-line>') instead."
+    - "NEVER reintroduce force_no_redact in any form. The argument was removed by ADR-001."
+  # Project-specific Quality Gates beyond the template's defaults (GATE 1 Tests, anti-mock, code-quality)
+  # Each becomes "GATE N — <name>" with a list of checks. Drives developer.md.tmpl §3 GATE loop.
+  developer_gates:
+    - name: "Redaction"
+      note: "project-critical, Phase 1 onward"
+      checks:
+        - "Code touching capture path has fixture-secret tests"
+        - "Audit-log row written and tested for every redaction event"
+        - "Raw secret values verified absent from JSONL, SQLite, QMD after redaction"
+        - "`force_no_redact` not present in code or tests"
+    - name: "Schema Independence"
+      checks:
+        - "`git diff` does NOT include `import hermes_state` (except via documented public helpers)"
+        - "Zero references to `memory_store.db` file path (holographic's file)"
+        - "All Hermes core access via documented public APIs:\n    - hermes_constants.get_hermes_home()\n    - hermes_state.apply_wal_with_fallback()\n    - agent.memory_provider.MemoryProvider (the ABC only)"
+        - "Our SQLite lives at ~/.hermes/memory/index/memory.sqlite (NEVER elsewhere)"
+    - name: "Source-Ref Discipline"
+      note: "Phase 2+"
+      checks:
+        - "Every `memory_write` call has `source_ref` set"
+        - "New `source_ref` formats have a corresponding test in test_source_resolver.py"
+        - "Every fact/decision/open_question row has populated `source_refs_json`"
+  # Areas where TDD is especially strict (drives developer.md.tmpl §4 first sentence)
+  developer_tdd_critical_areas:
+    - "Phase 1 redaction / capture"
+  # Categories that ALWAYS end in kanban_block(review-required) rather than auto-complete (developer.md.tmpl §7)
+  developer_review_required:
+    - "Any work touching SQLite schema (`memory.sqlite` migrations, new tables, new columns)"
+    - "Phase 1 redaction guard changes (false positives or false negatives are catastrophic)"
+    - "Phase 5 narrative-thread injection code (the `/new` fix — has a known-tricky history)"
+    - "Phase 6 migration script (data loss potential)"
+    - "Any change with `force_no_redact` removal scope (verify it really doesn't exist anywhere)"
+  # STOP-IMMEDIATELY triggers (developer.md.tmpl §8)
+  developer_stop_immediately:
+    - "You find a secret in existing memory data → block with `urgency=critical`"
+    - "You find a way the schema-independence guarantee is broken → block, do not commit"
+    - "You see signs of data corruption in `memory.sqlite` or raw JSONL"
+  qa:
+    - "NEVER approve a card whose tests stub out internal hermes-local modules. Real services only — Qdrant @ :6333, LMS @ :1235, SQLite via tmp_path."
+    - "NEVER approve a card whose changes touch holographic schema files."
+    - "NEVER approve a phase gate without independent verification of redaction guarantees by hm-auditor."
+
+# Phase-specific verification recipes — drives qa.md.tmpl §6 (sourced from hm-qa.md §6)
+qa_recipes:
+  - title: "Redaction"
+    phase: 1
+    lang: python
+    body: |
+      # Fixture file: tests/integration/memory/fixtures/secrets.py
+      FIXTURE_SECRETS = {
+          "aws_access_key": "AKIAFA...FAKE",
+          "github_token":   "ghp_aa...aaaa",
+          "openai_key":     "sk-tes...aaaa",
+          "anthropic_key":  "sk-ant...aaaa",
+          "ssn":            "123-45-6789",
+          "private_key":    "-----BEGIN RSA PRIVATE KEY-----\n...",
+      }
+
+      # Verify each is caught:
+      for kind, value in FIXTURE_SECRETS.items():
+          capture_event({"content": f"my key is {value}", ...})
+          # Inspect raw JSONL, SQLite, QMD — value MUST NOT appear
+          # Inspect audit_log — row must exist with kind
+  - title: "Provider swap"
+    phase: 2
+    lang: bash
+    body: |
+      # Before:
+      hermes config get memory.provider
+      # Expected: holographic
+
+      # Swap:
+      hermes config set memory.provider hermes-local
+
+      # Restart Hermes; tool inventory:
+      hermes -p hm-qa --print-tools | grep -E '^fact_store|^fact_feedback|^memory_'
+      # Expected: fact_store, fact_feedback ABSENT
+      #           memory_query, memory_write, memory_get_source, etc. PRESENT
+  - title: "Graceful degradation"
+    phase: 4
+    lang: bash
+    body: |
+      # Kill Qdrant
+      docker stop qdrant   # or whatever runs it
+
+      # Run memory_query in hybrid mode
+      hermes -p hm-qa chat -q 'use memory_query("test query")'
+
+      # Expected:
+      # - Response includes 'degraded_modes': ['qdrant']
+      # - Results from FTS still returned
+  - title: "Rebuild-from-raw"
+    phase: 6
+    lang: bash
+    body: |
+      # Snapshot row counts
+      sqlite3 ~/.hermes/memory/index/memory.sqlite \
+        "SELECT 'sessions', count(*) FROM sessions UNION
+         SELECT 'turns', count(*) FROM turns UNION
+         SELECT 'chunks', count(*) FROM chunks UNION
+         SELECT 'facts', count(*) FROM facts;"
+
+      # Delete SQLite + Qdrant
+      rm ~/.hermes/memory/index/memory.sqlite
+      # (Qdrant: delete collections via API)
+
+      # Rebuild
+      hermes memory rebuild-indexes
+
+      # Compare row counts — must match snapshot
+  - title: "Narrative thread `/new`"
+    phase: 5
+    lang: bash
+    body: |
+      # Session A
+      hermes chat
+      > "let's design the auth layer for Project Foo"
+      # 3-4 turns about Project Foo
+      /quit
+
+      # Restart and resume
+      hermes chat
+      /resume <session_A_id>
+      > "what were we working on?"
+      # Expected: response references "Project Foo auth"
+
+      # Now /new
+      /new
+      > "anything to continue from before?"
+      # Expected: response references prior session focus
+
+inputs:
+  project_md: PROJECT.md
+  prd_md: prd.md
+  tdd_md: TDD.md
+  plan_md: Plan.md
+  epics_md: EPICS.md
+  tasklist_md: TASKLIST.md
+  critique_md: docs/v0.2-critique.md

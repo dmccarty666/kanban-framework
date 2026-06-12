@@ -1,0 +1,146 @@
+# Starter project.yaml for the financial-app project.
+#
+# This is a STARTER — the values here are placeholders that should be edited
+# before running bootstrap. Items marked TODO are placeholders. The yaml is
+# valid against the schema as-is, but the goal/constraints/paths should be
+# replaced with real values.
+#
+# Workflow:
+#   1. Edit this file to set real values
+#   2. cp this file to ~/.hermes/PROJECTS/financial-app/project.yaml
+#   3. Author PROJECT.md, prd.md, TDD.md, Plan.md, EPICS.md alongside it
+#   4. Run bootstrap.sh on it
+
+project:
+  slug: fin
+  dir_name: financial-app
+  name: "Financial App"
+  domain: "personal finance dashboard with portfolio tracking and Plaid integration"
+  description: |
+    TODO — describe the financial-app project: what problem it solves, who
+    the user is, what success looks like.
+  primary_language: python    # adjust if mostly TypeScript / mixed
+  test_command: "pytest tests/"
+  build_command: ""
+
+phases:
+  count: 6                    # adjust to match your Plan.md
+  acceptance_test_section: "§9"
+
+goal:
+  headline: |
+    Land the Financial App MVP — Plan.md Phases 1 through 6 — with the MVP
+    acceptance test suite green.
+  out_of_scope:
+    - "Real-time trading execution"
+    - "Multi-user authentication / sharing"
+    - "Mobile native apps (iOS/Android)"
+    - "Tax filing automation"
+  hard_constraints:
+    - "Plaid: sandbox keys only — never commit production Plaid client_id/secret"
+    - "Currency math: every monetary value goes through Decimal — float math forbidden"
+    - "Database backups before any migration touches Plaid sync history"
+    - "PII redaction: account numbers and Plaid item IDs redacted in any logged response"
+  acceptance_scenarios_pass:
+    - A   # TODO replace with your scenario IDs from Plan.md §9
+    - B
+    - C
+    - D
+
+escalation:
+  channel: telegram
+  contact: David
+  cooldown_hours: 24
+  notify_on:
+    - review_required_24h
+    - adr_needed
+    - worker_reclaimed_twice
+    - hallucination_warning
+    - state_drift
+    - phase_gate_failed
+    - goal_achieved
+    - stale_lock_5h
+    - stale_qa_block
+
+orchestrator:
+  cron_schedule: "*/30 * * * *"
+  heartbeat_cooldown_minutes: 10
+  max_actions_per_tick: 3
+  hard_timeout_seconds: 900
+
+models:
+  orchestrator:
+    provider: openrouter
+    model: "minimax/minimax-m2.7"
+  planner:
+    provider: openrouter
+    model: "minimax/minimax-m2.7"
+  architect:
+    provider: openrouter
+    model: "nvidia/nemotron-3-super-120b-a12b"
+  developer:
+    provider: openai-codex
+    model: "gpt-5.4"
+  qa:
+    # NOTE: financial-app uses Kimi-K2 for QA because money is on the line —
+    # we want a model less prone to optimistic completion claims.
+    provider: openrouter
+    model: "moonshotai/kimi-k2"
+  docs:
+    provider: openrouter
+    model: "moonshotai/kimi-k2"
+  auditor:
+    provider: openrouter
+    model: "moonshotai/kimi-k2"
+
+skills:
+  orchestrator:
+    - kanban-orchestrator
+  planner:
+    - kanban-worker
+    - writing-plans
+  architect:
+    - kanban-worker
+    - writing-plans
+  developer:
+    - kanban-worker
+    - test-driven-development
+    - systematic-debugging
+    - github-pr-workflow
+  qa:
+    - kanban-worker
+    - requesting-code-review
+    - systematic-debugging
+  docs:
+    - kanban-worker
+  auditor:
+    - kanban-worker
+
+paths:
+  source_root: "TODO/path/to/financial-app/src"      # e.g. ~/projects/financial-app/src
+  test_root: "TODO/path/to/financial-app/tests"
+  docs_root: "docs/"
+  adr_root: "docs/adr/"
+  sibling_projects:
+    # If financial-app pulls in shared Plaid client / utilities from a sibling
+    # project, list it here. Leave empty otherwise.
+    []
+
+guardrails:
+  developer:
+    - "NEVER commit a real Plaid client_id or secret — sandbox keys ONLY, loaded from environment."
+    - "NEVER use float for monetary values. Decimal (with explicit context) is mandatory throughout."
+    - "NEVER write directly to Plaid sync history tables without a migration script and dry-run mode."
+    - "NEVER skip PII redaction on Plaid API responses being logged or written to disk."
+  qa:
+    - "NEVER approve a card whose tests use float arithmetic for currency."
+    - "NEVER approve a card that mocks Plaid sandbox — real sandbox API is mandatory in integration tests."
+    - "NEVER approve a phase gate without verifying redaction tests cover the new code paths."
+
+inputs:
+  project_md: PROJECT.md
+  prd_md: prd.md
+  tdd_md: TDD.md
+  plan_md: Plan.md
+  epics_md: EPICS.md
+  tasklist_md: TASKLIST.md

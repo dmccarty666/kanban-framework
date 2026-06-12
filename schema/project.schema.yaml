@@ -1,0 +1,452 @@
+# yaml-language-server: $schema=https://json-schema.org/draft/2020-12/schema
+#
+# JSON Schema (in YAML) for project.yaml — the single source of truth for any
+# kanban-orchestrated project under ~/.hermes/PROJECTS/<slug>/.
+#
+# This file is consumed by:
+#   - bootstrap.sh        (validates yaml before rendering anything)
+#   - render-soul.py      (uses values to fill SOUL templates)
+#   - heartbeat.sh        (reads project.slug, orchestrator.cron_schedule)
+#   - install-souls.sh    (reads project.slug for profile names)
+#
+# To validate manually:
+#   python3 -c "import jsonschema, yaml; \
+#     jsonschema.validate(yaml.safe_load(open('project.yaml')), \
+#                         yaml.safe_load(open('schema/project.schema.yaml')))"
+
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://hermes-agent/projects-framework/project.schema.yaml
+title: Project Framework Configuration
+description: |
+  Defines a project that uses the kanban-orchestrated multi-agent development
+  framework. One file per project, lives at PROJECTS/<slug>/project.yaml.
+
+type: object
+required: [project, phases, goal, escalation, orchestrator, models, paths]
+additionalProperties: false
+
+properties:
+
+  project:
+    type: object
+    required: [slug, name, domain]
+    additionalProperties: false
+    properties:
+      slug:
+        type: string
+        pattern: "^[a-z][a-z0-9-]{1,15}$"
+        description: |
+          Unique short identifier (2-16 lowercase chars, hyphens allowed).
+          Used as prefix for profile names, kanban tenant, cron job, file
+          slugs. MUST NOT collide with other projects or Hermes built-ins.
+          Examples: "hm", "fin", "ocw"
+
+          Slug and dir_name can differ — slug is the agent-facing identity,
+          dir_name is the filesystem location.
+      dir_name:
+        type: string
+        pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]+$"
+        description: |
+          Directory name under ~/.hermes/PROJECTS/. Defaults to slug if
+          omitted. Specify explicitly when the human-readable project name
+          should differ from the short slug (e.g. slug=hm, dir_name=hermes-memory).
+      name:
+        type: string
+        description: Human-readable display name (e.g. "Hermes Memory")
+      domain:
+        type: string
+        description: |
+          One-sentence statement of what this project does. Rendered into
+          worker SOULs so they know their context.
+      description:
+        type: string
+        description: Multi-paragraph description (optional)
+      primary_language:
+        type: string
+        enum: [python, typescript, javascript, go, rust, mixed, other]
+        default: python
+      primary_language_ext:
+        type: string
+        description: |
+          File extension associated with primary_language for use in
+          search_files() glob patterns. Defaults to "py" for python.
+        default: py
+      test_command:
+        type: string
+        description: |
+          Command to run the project's tests. Rendered into developer + qa
+          SOULs. Examples: "pytest tests/", "npm test", "go test ./..."
+      build_command:
+        type: string
+        description: |
+          Command to build the project (if any). Rendered into developer SOUL.
+          Leave blank if no build step.
+        default: ""
+
+  phases:
+    type: object
+    required: [count]
+    additionalProperties: false
+    properties:
+      count:
+        type: integer
+        minimum: 1
+        maximum: 20
+        description: |
+          Number of phases in this project's Plan.md. The orchestrator state
+          machine cycles through 1..count. The Phase-N gate card title
+          follows the convention "T-PHASE<N>-GATE".
+      acceptance_test_section:
+        type: string
+        description: |
+          Section reference in Plan.md where MVP acceptance scenarios live
+          (e.g. "§9"). Referenced by hm-qa and the gate cards.
+        default: "§9"
+      planning_task_title_pattern:
+        type: string
+        description: |
+          Title template for the per-phase planning task. {phase} is the
+          phase number.
+        default: "T-PLAN-PHASE-{phase}: Decompose Phase {phase} of {project.slug}"
+      qa_gate_checklist:
+        type: array
+        description: |
+          Per-phase verification checklist consumed by qa.md.tmpl §3 GATE 4
+          ("Project-Critical Gates"). Each entry is a phase with named
+          check items. Optional — when absent, qa SOUL falls back to
+          referencing Plan.md acceptance scenarios generically.
+        items:
+          type: object
+          required: [number, name, checks]
+          additionalProperties: false
+          properties:
+            number: { type: integer, minimum: 1 }
+            name:   { type: string }
+            checks:
+              type: array
+              items: { type: string }
+
+  goal:
+    type: object
+    required: [headline]
+    additionalProperties: false
+    properties:
+      headline:
+        type: string
+        description: |
+          One-sentence statement of the goal. Rendered into GOAL.md.
+      out_of_scope:
+        type: array
+        items: { type: string }
+        description: |
+          List of explicitly NOT-in-scope items. If a worker proposes one
+          of these, the orchestrator escalates instead of approving.
+      hard_constraints:
+        type: array
+        items: { type: string }
+        description: |
+          Inviolable rules. Worker violating one of these triggers a
+          critical-urgency escalation. Rendered into developer + qa + auditor
+          SOULs as "NEVER" rules.
+      acceptance_scenarios_pass:
+        type: array
+        items: { type: string }
+        description: |
+          List of MVP acceptance scenarios that must pass for GOAL to be
+          achieved (e.g. ["A", "B", "C", "D", "E", "F", "G", "H", "I",
+          "J", "K", "L"]). These map to sections of Plan.md.
+
+  escalation:
+    type: object
+    required: [channel]
+    additionalProperties: false
+    properties:
+      channel:
+        type: string
+        enum: [telegram, discord, slack, email, none]
+        description: |
+          Where the orchestrator pings the human on escalations.
+          "none" = log to HISTORY.md only, no ping.
+      contact:
+        type: string
+        description: Human-readable name of who gets notified (e.g. "David")
+      cooldown_hours:
+        type: integer
+        minimum: 1
+        default: 24
+        description: Hours between pings on the same issue
+      notify_on:
+        type: array
+        items:
+          type: string
+          enum:
+            - review_required_24h
+            - adr_needed
+            - worker_reclaimed_twice
+            - hallucination_warning
+            - state_drift
+            - phase_gate_failed
+            - goal_achieved
+            - stale_lock_5h
+            - stale_qa_block
+
+  orchestrator:
+    type: object
+    additionalProperties: false
+    properties:
+      cron_schedule:
+        type: string
+        pattern: "^[\\d*/,-]+ [\\d*/,-]+ [\\d*/,-]+ [\\d*/,-]+ [\\d*/,-]+$"
+        default: "*/30 * * * *"
+        description: Standard 5-field crontab expression
+      heartbeat_cooldown_minutes:
+        type: integer
+        minimum: 1
+        default: 10
+        description: |
+          Minimum gap between ticks. If a tick fires <N minutes after the
+          last one (e.g. cron retry), the orchestrator exits immediately.
+      max_actions_per_tick:
+        type: integer
+        minimum: 1
+        maximum: 10
+        default: 3
+      hard_timeout_seconds:
+        type: integer
+        minimum: 60
+        default: 900
+        description: |
+          Tick is killed if it runs longer than this. Must be < cron
+          interval. Default 15 min for 30-min cron.
+
+  models:
+    type: object
+    description: |
+      Provider + model assignment per role. Each role MUST be present.
+      Renderer fails if any are missing — better explicit than silent default.
+    required: [orchestrator, planner, architect, developer, qa, docs, auditor]
+    additionalProperties: false
+    patternProperties:
+      "^(orchestrator|planner|architect|developer|qa|docs|auditor)$":
+        type: object
+        required: [provider, model]
+        additionalProperties: false
+        properties:
+          provider:
+            type: string
+            description: e.g. openrouter, anthropic, openai-codex, custom:lmstudio
+          model:
+            type: string
+            description: e.g. "minimax/minimax-m2.7", "gpt-5.4"
+          base_url:
+            type: string
+            description: Override base URL (optional, for custom providers)
+          api_key_env:
+            type: string
+            description: Env var holding the API key (optional)
+
+  skills:
+    type: object
+    description: |
+      Per-role skill packages auto-loaded by workers. The kanban-worker skill
+      is implicit for all roles; everything else is opt-in here.
+    additionalProperties:
+      type: array
+      items: { type: string }
+
+  paths:
+    type: object
+    additionalProperties: false
+    required: [source_root]
+    properties:
+      source_root:
+        type: string
+        description: |
+          Primary code directory the developer SOUL works in.
+          Path relative to project root or absolute. Examples:
+          "~/.hermes/hermes-agent/plugins/memory/hermes-local",
+          "~/projects/financial-app/src"
+      test_root:
+        type: string
+        description: Where tests live (relative or absolute)
+        default: "tests/"
+      docs_root:
+        type: string
+        default: "docs/"
+      adr_root:
+        type: string
+        description: Where ADRs live (relative to project root)
+        default: "docs/adr/"
+      repo_root:
+        type: string
+        description: |
+          Absolute path to the git repository that hosts the code under
+          source_root. Used by docs SOUL for `git log` invocations.
+      data_root:
+        type: string
+        description: |
+          Free-form text describing where the project's persistent data
+          lives (multi-line allowed — rendered verbatim into developer SOUL
+          §1 Canonical project paths).
+      additional_source_roots:
+        type: array
+        description: |
+          Extra code roots beyond `source_root` that workers may touch
+          (e.g. shared libraries, sidecar services). Rendered into
+          developer + qa SOULs §1.
+        items:
+          type: object
+          required: [path]
+          additionalProperties: false
+          properties:
+            path:  { type: string }
+            label: { type: string }
+      sibling_projects:
+        type: array
+        description: |
+          Other projects this one depends on or interacts with. Each entry
+          is "label:absolute-path" — referenced in developer SOUL.
+        items:
+          type: object
+          required: [label, path]
+          properties:
+            label: { type: string }
+            path: { type: string }
+            access:
+              type: string
+              enum: [read-only, read-write]
+              default: read-only
+
+  guardrails:
+    type: object
+    description: |
+      Project-specific "NEVER" rules and structured worker guidance. Beyond
+      the simple per-role NEVER lists, this section carries developer Quality
+      Gates, review-required categories, stop-immediately triggers, and
+      TDD-critical area names that the templates loop over.
+    additionalProperties: false
+    properties:
+      developer:
+        type: array
+        items: { type: string }
+      qa:
+        type: array
+        items: { type: string }
+      architect:
+        type: array
+        items: { type: string }
+      planner:
+        type: array
+        items: { type: string }
+      developer_gates:
+        type: array
+        description: |
+          Extra Quality Gates beyond the framework defaults (tests +
+          anti-mock + code-quality). Each gate becomes "GATE N — <name>"
+          with a list of ☐ check items. Drives developer.md.tmpl §3.
+        items:
+          type: object
+          required: [name, checks]
+          additionalProperties: false
+          properties:
+            name:   { type: string }
+            note:   { type: string }
+            checks:
+              type: array
+              items: { type: string }
+      developer_tdd_critical_areas:
+        type: array
+        description: |
+          Area names where TDD is especially strict. Rendered into the
+          opening sentence of developer.md.tmpl §4.
+        items: { type: string }
+      developer_review_required:
+        type: array
+        description: |
+          Categories of work that ALWAYS end with kanban_block(review-required)
+          instead of auto-completing. Rendered into developer.md.tmpl §7.
+        items: { type: string }
+      developer_stop_immediately:
+        type: array
+        description: |
+          STOP-IMMEDIATELY triggers in developer.md.tmpl §8 (escalation block).
+        items: { type: string }
+      qa_stop_immediately:
+        type: array
+        description: |
+          STOP-IMMEDIATELY (urgency=critical) triggers in qa.md.tmpl §8.
+        items: { type: string }
+
+  test_environment:
+    type: object
+    description: |
+      Local infrastructure available to integration tests. Drives the
+      "Anti-Mock Philosophy" sections of developer + qa SOULs. When the
+      project has no special test infra, omit this block — the templates
+      fall back to generic prose.
+    additionalProperties: false
+    properties:
+      services:
+        type: array
+        items:
+          type: object
+          required: [name, endpoint]
+          additionalProperties: false
+          properties:
+            name:         { type: string }
+            endpoint:     { type: string }
+            note:         { type: string }
+            test_pattern: { type: string }
+            health_check: { type: string }
+
+  code_quality:
+    type: object
+    description: |
+      Numeric coding-style limits referenced by developer.md.tmpl
+      (function-length cap + baby-step commit caps). Defaults come from
+      the template itself so this block is fully optional.
+    additionalProperties: false
+    properties:
+      max_function_lines:       { type: integer, minimum: 1, default: 75 }
+      commit_max_files:         { type: integer, minimum: 1, default: 3 }
+      commit_max_lines_added:   { type: integer, minimum: 1, default: 50 }
+      commit_max_lines_removed: { type: integer, minimum: 1, default: 50 }
+
+  qa_recipes:
+    type: array
+    description: |
+      Phase-specific verification recipes rendered verbatim into qa.md.tmpl
+      §6. Each recipe is a titled code block; lang defaults to bash.
+    items:
+      type: object
+      required: [title, body]
+      additionalProperties: false
+      properties:
+        title: { type: string }
+        phase: { type: integer, minimum: 1 }
+        lang:  { type: string }
+        body:  { type: string }
+
+  phase_exit_criteria_count:
+    type: integer
+    minimum: 1
+    default: 18
+    description: |
+      Number of phase-gate exit criteria the auditor verifies. Rendered
+      into auditor.md.tmpl as "run full N-point checklist".
+
+  inputs:
+    type: object
+    description: |
+      Optional overrides for which files the framework treats as "human-
+      authored inputs" the workers reference. Defaults match the
+      hermes-memory convention.
+    additionalProperties: false
+    properties:
+      project_md:    { type: string, default: PROJECT.md }
+      prd_md:        { type: string, default: prd.md }
+      tdd_md:        { type: string, default: TDD.md }
+      plan_md:       { type: string, default: Plan.md }
+      epics_md:      { type: string, default: EPICS.md }
+      tasklist_md:   { type: string, default: TASKLIST.md }
+      critique_md:   { type: string, description: "Path to a critique / known-gotchas doc (optional)." }
