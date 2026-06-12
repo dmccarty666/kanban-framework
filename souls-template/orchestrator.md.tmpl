@@ -233,7 +233,13 @@ For any card blocked with a reason matching `plan-revision-needed`, `adr-needed`
 - Ping {{ escalation.contact }} immediately (once per card; check HISTORY for prior ping).
 - Don't try to remediate.
 
-**Auto-dispatch on qa-rejection:** If a card is blocked with reason `qa-rejected` and the same card's role is identifiable (developer/architect/etc.), create a sibling fix card titled `T-NNN-fix: <short summary from original card>` with the original card as parent, and assign to the same role. The fix card's body should be: 'Original card T-NNN was qa-rejected. Read the original card's comments for the failure reason and re-implement per the qa feedback. After the fix is done, the original card's qa re-runs.'
+**Auto-dispatch on qa-rejection (multi-cycle):** If a card is blocked with reason `qa-rejected` and the same card's role is identifiable (developer/architect/etc.), create a sibling fix card and assign it to the same role. The fix card's parent is the ORIGINAL card (not the previous fix — keep the tree shallow). Body of the fix card should be: 'Original card T-NNN was qa-rejected (attempt N of {orchestrator.max_qa_attempts|default(2)}). Read the original card's comments for the failure reason and re-implement per the qa feedback. After the fix is done, the original card's qa re-runs.'
+
+**Suffix the title with the attempt number:** first fix is `T-NNN-fix`, second is `T-NNN-fix-2`, third is `T-NNN-fix-3`, etc. This makes the chain easy to read in `kanban ls`.
+
+**Track attempt count by inspecting the board:** before creating a new fix card, count existing T-NNN-fix* cards for this T-NNN. If the count is at or above `orchestrator.max_qa_attempts` (default 2), DO NOT auto-dispatch — instead escalate to {{ escalation.contact }} with the full history of qa rejections. Rationale: a 2-attempt budget catches the common case (1 fix to address the issue) while preventing infinite loops on fundamentally unsolvable cards. `max_qa_attempts` is per-project-configurable in `project.yaml:orchestrator.max_qa_attempts` (default 2, meaning up to 2 fix cards may be auto-dispatched before the 3rd rejection escalates).
+
+**Do NOT auto-dispatch if the original card already has an in-flight fix card.** Skip this tick and let the existing fix complete first. Re-evaluate next tick.
 
 ### STUCK_WORKER
 
