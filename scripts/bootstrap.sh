@@ -14,6 +14,11 @@
 #   bootstrap.sh <project-dir> --dry-run   # print what would happen, no changes
 #   bootstrap.sh <project-dir> --partial   # don't create cron, don't install
 #                                          # profiles — useful for staging
+#   bootstrap.sh <project-dir> --install-cron
+#                                          # also register the cron job in the
+#                                          # user's crontab (off by default)
+#   bootstrap.sh <project-dir> --no-models # skip auto-setting per-role
+#                                          # provider/model in ~/.hermes/config.yaml
 #
 # Status: DRAFT — non-invasive, intended to be run against test projects.
 # DO NOT run against hermes-memory while Phase 6 is in flight.
@@ -25,6 +30,9 @@ RENDER_SCRIPT="${FRAMEWORK_DIR}/scripts/render-soul.py"
 SCHEMA_PATH="${FRAMEWORK_DIR}/schema/project.schema.yaml"
 HEARTBEAT_SH="${FRAMEWORK_DIR}/scripts/heartbeat.sh"
 
+# Canonical 7 roles — must match schema/project.schema.yaml:models
+ROLES=(orchestrator planner architect developer qa docs auditor)
+
 # ---------------------------------------------------------------------------
 # Arg parsing
 # ---------------------------------------------------------------------------
@@ -32,11 +40,15 @@ HEARTBEAT_SH="${FRAMEWORK_DIR}/scripts/heartbeat.sh"
 PROJECT_DIR=""
 DRY_RUN=0
 PARTIAL=0
+INSTALL_CRON=0
+NO_MODELS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --partial) PARTIAL=1; shift ;;
+        --install-cron) INSTALL_CRON=1; shift ;;
+        --no-models) NO_MODELS=1; shift ;;
         --help|-h)
             grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'
             exit 0
@@ -59,7 +71,7 @@ done
 
 if [[ -z "$PROJECT_DIR" ]]; then
     echo "ERROR: project directory required" >&2
-    echo "  Usage: $0 <project-dir> [--dry-run] [--partial]" >&2
+    echo "  Usage: $0 <project-dir> [--dry-run] [--partial] [--install-cron] [--no-models]" >&2
     exit 2
 fi
 
@@ -81,7 +93,7 @@ fi
 # Step 1: Validate project.yaml against schema
 # ---------------------------------------------------------------------------
 
-echo "[1/7] Validating $PROJECT_YAML against schema..."
+echo "[1/8] Validating $PROJECT_YAML against schema..."
 python3 -c "
 import yaml, jsonschema, sys
 schema = yaml.safe_load(open('$SCHEMA_PATH'))
@@ -129,7 +141,7 @@ fi
 # ---------------------------------------------------------------------------
 
 echo
-echo "[2/7] Checking human-input files..."
+echo "[2/8] Checking human-input files..."
 missing_inputs=0
 for f in PROJECT.md prd.md TDD.md Plan.md EPICS.md; do
     if [[ -f "$PROJECT_DIR/$f" ]]; then
@@ -148,7 +160,7 @@ fi
 # ---------------------------------------------------------------------------
 
 echo
-echo "[3/7] Rendering SOULs from templates..."
+echo "[3/8] Rendering SOULs from templates..."
 SOULS_DIR="$PROJECT_DIR/souls"
 if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  would render → $SOULS_DIR/"
@@ -161,10 +173,11 @@ fi
 # ---------------------------------------------------------------------------
 
 echo
-echo "[4/7] Initializing orchestrator directory..."
+echo "[4/8] Initializing orchestrator directory..."
 ORCH_DIR="$PROJECT_DIR/orchestrator"
 if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  would create $ORCH_DIR/{GOAL,STATE,HISTORY}.md"
+    echo "  would symlink ~/.hermes/PROJECTS/$PROJECT_SLUG -> $PROJECT_DIR"
 else
     mkdir -p "$ORCH_DIR"
     # GOAL.md is rendered from yaml goal section (TODO: dedicated GOAL template)
@@ -224,6 +237,15 @@ EOF
     else
         echo "  • HISTORY.md exists, leaving alone"
     fi
+
+    # Symlink ~/.hermes/PROJECTS/<slug> -> $PROJECT_DIR.
+    # Required because the orchestrator + worker SOULs read GOAL/STATE/HISTORY
+    # from the canonical path ~/.hermes/PROJECTS/<slug>/orchestrator/. The
+    # symlink is force-updated so re-runs of bootstrap are idempotent.
+    HERMES_PROJECTS_DIR="$HOME/.hermes/PROJECTS"
+    mkdir -p "$HERMES_PROJECTS_DIR"
+    ln -sfn "$PROJECT_DIR" "$HERMES_PROJECTS_DIR/$PROJECT_SLUG"
+    echo "  ✓ symlinked $HERMES_PROJECTS_DIR/$PROJECT_SLUG -> $PROJECT_DIR"
 fi
 
 # ---------------------------------------------------------------------------
@@ -231,29 +253,36 @@ fi
 # ---------------------------------------------------------------------------
 
 echo
-echo "[5/7] Installing project script shims..."
+echo "[5/8] Installing project script shims..."
 SCRIPTS_DIR="$PROJECT_DIR/scripts"
 mkdir -p "$SCRIPTS_DIR"
 
-# Project heartbeat.sh is a thin wrapper that invokes the framework version
+# Project heartbeat.sh is a thin wrapper that invokes the framework version.
+# We use an unquoted heredoc (<<EOF, NOT <<'EOF') so $FRAMEWORK_DIR gets
+# expanded at bootstrap time to the absolute framework path. That bakes the
+# right path into the shim — no runtime dependency on the framework being at
+# any particular location.
 PROJ_HB="$SCRIPTS_DIR/heartbeat.sh"
 if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  would create $PROJ_HB (shim invoking framework heartbeat)"
+    echo "  shim target: ${FRAMEWORK_DIR}/scripts/heartbeat.sh"
 else
-    cat > "$PROJ_HB" <<'EOF'
+    cat > "$PROJ_HB" <<EOF
 #!/usr/bin/env bash
 # heartbeat.sh — project-specific shim that delegates to the framework version.
 #
 # This script just sets PROJECT_DIR and invokes the framework heartbeat.
 # Do not put project-specific logic here — modify project.yaml instead.
+# The framework path is baked in at bootstrap time so the shim has no
+# runtime dependency on the framework being at any particular location.
 
 set -euo pipefail
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-exec env PROJECT_DIR="$PROJECT_DIR" \
-    ~/.hermes/PROJECTS/.framework/scripts/heartbeat.sh "$@"
+PROJECT_DIR="\$(cd "\$(dirname "\$0")/.." && pwd)"
+exec env PROJECT_DIR="\$PROJECT_DIR" \\
+    "${FRAMEWORK_DIR}/scripts/heartbeat.sh" "\$@"
 EOF
     chmod +x "$PROJ_HB"
-    echo "  ✓ wrote $PROJ_HB"
+    echo "  ✓ wrote $PROJ_HB (delegates to ${FRAMEWORK_DIR}/scripts/heartbeat.sh)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -262,12 +291,11 @@ fi
 
 if [[ "$PARTIAL" -eq 1 ]]; then
     echo
-    echo "[6/7] SKIPPED (--partial) — would create 7 Hermes profiles + install SOULs"
+    echo "[6/8] SKIPPED (--partial) — would create 7 Hermes profiles + install SOULs"
     echo "       Run again without --partial when ready."
 else
     echo
-    echo "[6/7] Creating Hermes profiles + installing SOULs..."
-    ROLES=(orchestrator planner architect developer qa docs auditor)
+    echo "[6/8] Creating Hermes profiles + installing SOULs..."
     for role in "${ROLES[@]}"; do
         profile="${PROJECT_SLUG}-${role}"
         profile_dir="${HOME}/.hermes/profiles/${profile}"
@@ -286,35 +314,107 @@ else
         cp -f "$soul_src" "$profile_dir/SOUL.md"
         echo "  ✓ $profile  ($(wc -l < "$profile_dir/SOUL.md") line SOUL installed)"
     done
-    echo
-    echo "  NOTE: profile model/provider config is NOT auto-set here. Use:"
-    echo "    hermes config set profiles.${PROJECT_SLUG}-<role>.provider <provider>"
-    echo "    hermes config set profiles.${PROJECT_SLUG}-<role>.model <model>"
-    echo "  per project.yaml > models.<role>."
+    # Per-role provider/model is auto-set in Step 7 (unless --no-models).
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7: Register cron job
+# Step 7: Auto-set per-role provider/model in ~/.hermes/config.yaml
+# ---------------------------------------------------------------------------
+
+if [[ "$PARTIAL" -eq 1 || "$NO_MODELS" -eq 1 ]]; then
+    echo
+    echo "[7/8] SKIPPED — per-role provider/model not auto-set (--partial or --no-models)"
+else
+    echo
+    echo "[7/8] Setting per-role provider/model in ~/.hermes/config.yaml..."
+    set_count=0
+    skip_count=0
+    for role in "${ROLES[@]}"; do
+        provider=$(read_yaml "models.${role}.provider" "")
+        model=$(read_yaml "models.${role}.model" "")
+        profile="${PROJECT_SLUG}-${role}"
+        if [[ -z "$provider" || -z "$model" ]]; then
+            echo "  ⚠ $role: missing provider/model in project.yaml — skipping"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            echo "  would set profiles.${profile}.provider = $provider"
+            echo "  would set profiles.${profile}.model    = $model"
+            set_count=$((set_count + 1))
+            continue
+        fi
+        # Prefer `hermes config set` when the CLI is available; otherwise
+        # edit ~/.hermes/config.yaml directly via PyYAML.
+        if command -v hermes >/dev/null 2>&1; then
+            hermes config set "profiles.${profile}.provider" "$provider" >/dev/null
+            hermes config set "profiles.${profile}.model"    "$model"    >/dev/null
+        else
+            python3 - "$HOME/.hermes/config.yaml" "$profile" "$provider" "$model" <<'PYEOF'
+import sys, os, yaml
+cfg_path, profile, provider, model = sys.argv[1:5]
+with open(cfg_path) as f:
+    cfg = yaml.safe_load(f) or {}
+profiles = cfg.setdefault('profiles', {})
+p = profiles.setdefault(profile, {})
+p['provider'] = provider
+p['model']    = model
+# Atomic write: tmp + rename, so a crash mid-write doesn't truncate config.
+tmp = cfg_path + '.tmp'
+with open(tmp, 'w') as f:
+    yaml.safe_dump(cfg, f, default_flow_style=False, sort_keys=False)
+os.replace(tmp, cfg_path)
+PYEOF
+        fi
+        echo "  ✓ $profile  provider=$provider  model=$model"
+        set_count=$((set_count + 1))
+    done
+    echo "  → $set_count role(s) configured, $skip_count skipped"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 8: Register cron job
 # ---------------------------------------------------------------------------
 
 if [[ "$PARTIAL" -eq 1 ]]; then
     echo
-    echo "[7/7] SKIPPED (--partial) — would register cron job"
+    echo "[8/8] SKIPPED (--partial) — would register cron job"
 else
     echo
-    echo "[7/7] Cron job registration..."
+    echo "[8/8] Cron job registration..."
     JOB_NAME="${PROJECT_SLUG}-orchestrator"
+    # Marker comment + schedule line. The marker makes re-runs of bootstrap
+    # idempotent: a subsequent --install-cron removes the previous entry by
+    # its marker and inserts the new one.
+    JOB_MARKER="# hermes-kanban:${JOB_NAME}"
+    mkdir -p "$HOME/.hermes/logs"
+    JOB_LINE="${JOB_MARKER}
+${CRON_SCHEDULE} ${PROJ_HB} >> ${HOME}/.hermes/logs/${PROJECT_SLUG}-orchestrator.log 2>&1"
+
     if [[ "$DRY_RUN" -eq 1 ]]; then
         echo "  would register cron job: $JOB_NAME"
         echo "    schedule: $CRON_SCHEDULE"
         echo "    script:   $PROJ_HB"
         echo "    workdir:  $PROJECT_DIR"
+        echo "    logfile:  $HOME/.hermes/logs/${PROJECT_SLUG}-orchestrator.log"
+        echo "  copy-paste crontab entry:"
+        printf '%s\n' "$JOB_LINE" | sed 's/^/    /'
+    elif [[ "$INSTALL_CRON" -eq 1 ]]; then
+        # Read the existing crontab (empty if none), strip any previous
+        # entry for this job by its marker, then append the new one.
+        # We use `|| true` + a brace group because `set -e` + `pipefail`
+        # would otherwise kill the install when there's no crontab yet.
+        EXISTING=$(crontab -l 2>/dev/null || true)
+        {
+            printf '%s\n' "$EXISTING" | grep -v -F "$JOB_MARKER" || true
+            printf '%s\n' "$JOB_LINE"
+        } | crontab -
+        echo "  ✓ installed cron job: $JOB_NAME (schedule: $CRON_SCHEDULE)"
+        echo "    logfile: $HOME/.hermes/logs/${PROJECT_SLUG}-orchestrator.log"
     else
-        echo "  ⚠ Manual step required:"
-        echo "    Run from within a Hermes session:"
-        echo "      cronjob(action='create', name='$JOB_NAME', script='$PROJ_HB',"
-        echo "              schedule='$CRON_SCHEDULE', workdir='$PROJECT_DIR',"
-        echo "              no_agent=True, deliver='local')"
+        echo "  Copy-paste to register manually, or re-run with --install-cron:"
+        echo
+        printf '%s\n' "$JOB_LINE" | sed 's/^/    /'
     fi
 fi
 
@@ -326,8 +426,16 @@ if [[ $missing_inputs -gt 0 ]]; then
     echo "  1. Author the missing input files (PROJECT.md, prd.md, TDD.md, etc.)"
 fi
 echo "  2. Review $ORCH_DIR/GOAL.md and customize as needed"
-echo "  3. Set per-role provider/model via 'hermes config set' (see step 6 output)"
-echo "  4. Verify orchestrator dry-run:"
-echo "       PROJECT_DIR=$PROJECT_DIR $HEARTBEAT_SH --dry-run --verbose"
-echo "  5. Register the cron job (see step 7 output)"
+if [[ "$PARTIAL" -eq 1 || "$NO_MODELS" -eq 1 ]]; then
+    echo "  3. Set per-role provider/model manually (was skipped during bootstrap):"
+    echo "       for each role in: ${ROLES[*]}"
+    echo "       hermes config set profiles.${PROJECT_SLUG}-<role>.provider <provider>"
+    echo "       hermes config set profiles.${PROJECT_SLUG}-<role>.model <model>"
+fi
+if [[ "$PARTIAL" -eq 0 && "$INSTALL_CRON" -eq 0 ]]; then
+    echo "  4. Register the cron job: copy-paste the line from step 8 above,"
+    echo "     or re-run bootstrap with --install-cron"
+fi
+echo "  5. Verify orchestrator dry-run:"
+echo "       PROJECT_DIR=$HOME/.hermes/PROJECTS/$PROJECT_SLUG $HEARTBEAT_SH --dry-run --verbose"
 echo "  6. Trigger an initial tick to verify everything works"
