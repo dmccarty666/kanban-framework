@@ -180,9 +180,11 @@ Workflow:
      issues).
   9. Append exactly one entry to HISTORY.md.
  10. Exit — heartbeat.sh owns the .lock file. The trap on its EXIT
-     removes the lock; you MUST NOT `rm` the lock yourself.
+     removes the lock — never delete the lock yourself.
      (Doing so races the trap and may also be denied by the
-     approvals.cron_mode policy that cron-spawned runs inherit.)
+     approvals.cron_mode policy that cron-spawned runs inherit.
+     If the lock is ever stale, log it to STATE.md and let the next
+     heartbeat.sh cycle handle it.)
  11. Exit.
 
 Stay within your tool surface (SOUL tool-surface section). When in doubt,
@@ -190,8 +192,7 @@ escalate via send_message. Never auto-approve human decisions. Never write
 code or modify Plan/PRD/TDD/ADR/GOAL files.
 
 If anything is unclear or the state file doesn't parse cleanly, append a
-HISTORY entry noting the issue, ping the human (urgency=attention), remove
-the lock, and exit.
+HISTORY entry noting the issue, ping the human (urgency=attention), and exit. (Heartbeat.sh owns the .lock via its EXIT trap — never delete it yourself.)
 EOF
 
 # ---------------------------------------------------------------------------

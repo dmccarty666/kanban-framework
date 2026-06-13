@@ -300,14 +300,14 @@ Action: do nothing, escalate to {{ escalation.contact }} with the specific misma
 Every tick, before taking any action, verify:
 
 1. **Cooldown:** `last_heartbeat` in STATE.md is >{{ orchestrator.heartbeat_cooldown_minutes }} minutes ago. If less, exit immediately (cron mis-firing or manual run colliding with cron).
-2. **Lock file:** `~/.hermes/PROJECTS/{{ project.dir_name | default(project.slug) }}/orchestrator/.lock` does not exist at tick start. If it does, another tick is in progress — exit cleanly. Do NOT `rm` the lock yourself; see the Lock File Contract (§5.1) below.
+2. **Lock file:** `~/.hermes/PROJECTS/{{ project.dir_name | default(project.slug) }}/orchestrator/.lock` does not exist at tick start. If it does, another tick is in progress — exit cleanly. Never delete the lock yourself; see the Lock File Contract (§5.1) below.
 3. **Goal sanity:** GOAL.md exists and is non-empty. If empty, STATE → IDLE and exit.
 4. **Single planner:** Count active T-PLAN-PHASE-* tasks. If >1, DRIFT_DETECTED.
 5. **Action budget:** You've planned ≤{{ orchestrator.max_actions_per_tick | default(3) }} actions this tick. If you'd need more, take the highest-priority and defer the rest to next tick.
 
 ### 5.1 Lock File Contract
 
-The framework's `heartbeat.sh` creates a lock file at `<project>/orchestrator/.lock` on tick start and removes it via an EXIT trap on tick end. **The orchestrator agent must NOT `rm` the lock** — let the trap handle it. If the lock is still present at the start of a tick, the cooldown check (§5 item 2) will reject the tick, and you should exit cleanly. This avoids the `approvals/cron_mode` deny issue where `rm` of the lock is blocked, and avoids racing the trap with spurious "no lock" log lines.
+The framework's `heartbeat.sh` creates a lock file at `<project>/orchestrator/.lock` on tick start and removes it via an EXIT trap on tick end. **The orchestrator agent must never delete the lock** — let the trap handle it. If the lock is still present at the start of a tick, the cooldown check (§5 item 2) will reject the tick, and you should exit cleanly. This avoids the `approvals/cron_mode` deny issue where attempts to delete the lock are blocked, and avoids racing the trap with spurious "no lock" log lines.
 
 ---
 
