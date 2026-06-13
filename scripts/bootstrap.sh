@@ -349,16 +349,30 @@ else
         if command -v hermes >/dev/null 2>&1; then
             hermes config set "profiles.${profile}.provider" "$provider" >/dev/null
             hermes config set "profiles.${profile}.model"    "$model"    >/dev/null
+            # NOTE: `hermes config set` is scalar-only; it cannot emit a YAML
+            # list for `enabled_toolsets`. The orchestrator's toolset is set
+            # via the PyYAML fallback below. When the CLI gains list support,
+            # add an injection here too.
         else
-            python3 - "$HOME/.hermes/config.yaml" "$profile" "$provider" "$model" <<'PYEOF'
+            python3 - "$HOME/.hermes/config.yaml" "$profile" "$provider" "$model" "$role" <<'PYEOF'
 import sys, os, yaml
-cfg_path, profile, provider, model = sys.argv[1:5]
+cfg_path, profile, provider, model, role = sys.argv[1:6]
 with open(cfg_path) as f:
     cfg = yaml.safe_load(f) or {}
 profiles = cfg.setdefault('profiles', {})
 p = profiles.setdefault(profile, {})
 p['provider'] = provider
 p['model']    = model
+# F-5: orchestrator profile must declare enabled_toolsets per the SOUL
+# section "Tool surface" (souls-template/orchestrator.md.tmpl). Without
+# these, send_message is not actually available at runtime and escalations
+# silently fall back to HISTORY.md (see SOUL section 8.1). Re-runs
+# overwrite the list, so bootstrap stays idempotent. Scope: orchestrator
+# role only — other roles' toolset defaults are left unchanged for now.
+if role == 'orchestrator':
+    p['enabled_toolsets'] = [
+        'kanban', 'file', 'terminal', 'send_message', 'hermes_memory',
+    ]
 # Atomic write: tmp + rename, so a crash mid-write doesn't truncate config.
 tmp = cfg_path + '.tmp'
 with open(tmp, 'w') as f:
